@@ -91,6 +91,24 @@ metadata = {
 ds = create_grid_from_ioapi(metadata)
 ```
 
+### create_lcc_grid
+
+::: xregrid.utils.create_lcc_grid
+
+Create a structured grid dataset with a Lambert Conformal Conic (LCC) projection.
+
+### create_sinusoidal_grid
+
+::: xregrid.utils.create_sinusoidal_grid
+
+Create a structured grid dataset with a Sinusoidal projection.
+
+### create_rotated_latlon_grid
+
+::: xregrid.utils.create_rotated_latlon_grid
+
+Create a structured grid dataset with a Rotated Pole (Rotated Lat-Lon) projection.
+
 ### create_mesh_from_coords
 
 ::: xregrid.utils.create_mesh_from_coords

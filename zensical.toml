@@ -14,6 +14,7 @@ nav = [
         { "Command Line Interface" = "user-guide/cli.md" },
         { "Unstructured Grids" = "user-guide/unstructured.md" },
         { "Visualization" = "user-guide/visualization.md" },
+        { "Scientific Hygiene" = "user-guide/hygiene.md" },
         { "HPC and Dask" = "user-guide/hpc.md" },
         { "Performance" = "user-guide/performance.md" }
     ]},
@@ -22,6 +23,7 @@ nav = [
     ]},
     { "API Reference" = [
         { "Regridder" = "api/regridder.md" },
+        { "Accessors" = "api/accessors.md" },
         { "Utilities" = "api/utils.md" }
     ]}
 ]

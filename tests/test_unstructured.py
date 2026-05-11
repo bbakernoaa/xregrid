@@ -1,12 +1,9 @@
 # Consolidated tests: unstructured
-from xregrid import *
-from xregrid.utils import *
-from xregrid.viz import *
-from xregrid.regridder import *
 
 try:
     import esmpy
-    if hasattr(esmpy, '_is_mock') or 'unittest.mock' in str(type(esmpy)):
+
+    if hasattr(esmpy, "_is_mock") or "unittest.mock" in str(type(esmpy)):
         raise ImportError
     HAS_REAL_ESMF = True
 except Exception:

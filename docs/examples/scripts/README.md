@@ -19,5 +19,14 @@ Regridding station-like point data to a regular 2D grid using nearest-neighbor m
 ### [Performance Optimization](plot_performance_optimization.py)
 Efficient workflows using weight reuse to speed up repeated regridding operations.
 
+### [Accessor Showcase](plot_accessor_showcase.py)
+Simplified workflows using the `.regrid.to()` xarray accessor.
+
+### [Unstructured Grids](plot_unstructured_grids.py)
+Regridding for MPAS and ICON style unstructured meshes.
+
+### [Larger-than-Memory Data](plot_larger_than_memory.py)
+Handling massive datasets using Dask and parallel weight generation.
+
 ### [ESMPy vs. XRegrid](plot_esmpy_comparison.py)
 A comparison of code complexity between raw ESMPy and the XRegrid API.
