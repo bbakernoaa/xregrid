@@ -27,10 +27,8 @@ from xregrid.utils import get_crs_info
 from xregrid.grid import _get_mesh_info
 
 try:
-    import esmpy
+    import esmpy  # noqa: F401
 
-    if hasattr(esmpy, "_is_mock") or "unittest.mock" in str(type(esmpy)):
-        raise ImportError
     HAS_REAL_ESMF = True
 except (ImportError, Exception):
     HAS_REAL_ESMF = False
