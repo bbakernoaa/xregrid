@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import numpy as np
-import pytest
 import xarray as xr
 import dask
 from xregrid.utils import create_grid_like, create_global_grid
@@ -13,6 +12,7 @@ class ComputeCounter(dask.callbacks.Callback):
 
     def _start(self, dsk):
         self.count += 1
+
 
 def test_create_grid_like_optimization_rectilinear():
     """
@@ -43,6 +43,7 @@ def test_create_grid_like_optimization_rectilinear():
     assert np.allclose(ds_new.lat.min(), -89.0)
     assert np.allclose(ds_new.lat.max(), 89.0)
 
+
 def test_create_grid_like_curvilinear_heuristic():
     """
     Verify that create_grid_like for curvilinear grids (2D coords)
@@ -72,6 +73,7 @@ def test_create_grid_like_curvilinear_heuristic():
     assert np.allclose(ds_new.lat.min(), 0.0)
     assert np.allclose(ds_new.lat.max(), 10.0)
 
+
 def test_create_grid_like_consistency_eager_lazy():
     """
     Verify that create_grid_like returns identical results for Eager and Lazy backends.
@@ -80,7 +82,7 @@ def test_create_grid_like_consistency_eager_lazy():
     ds_eager = create_global_grid(res_lat=10.0, res_lon=10.0)
 
     # Lazy source
-    ds_lazy = ds_eager.chunk({'lat': 9, 'lon': 18})
+    ds_lazy = ds_eager.chunk({"lat": 9, "lon": 18})
 
     # Apply
     res_eager = create_grid_like(ds_eager, res=5.0)
