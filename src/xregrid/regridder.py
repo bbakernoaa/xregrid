@@ -9,7 +9,7 @@ import numpy as np
 import xarray as xr
 from scipy.sparse import coo_matrix
 
-from xregrid.utils import update_history, get_crs_info, is_lazy, is_dask, is_cubed
+from xregrid.utils import update_history, get_crs_info, is_dask, is_cubed
 from xregrid.constants import (
     get_regrid_method_map,
     get_extrap_method_map,
@@ -2034,7 +2034,7 @@ class Regridder:
             True if the grid is detected as periodic.
         """
         try:
-            from xregrid.utils import _find_coord
+            from xregrid.utils import _find_coord, _get_min_max_lazy_aware
 
             lon = _find_coord(ds, "longitude")
             if lon is not None:
@@ -2042,20 +2042,13 @@ class Regridder:
                 if lon.attrs.get("boundary") == "periodic":
                     return True
 
-                # 2. Check eager values (dimension coordinates are eager in xarray)
-                lon_for_check = None
-                if not is_lazy(lon):
-                    # Already in memory
-                    lon_for_check = lon
-                elif lon.ndim == 1 and lon.name in lon.dims:
-                    # Xarray dimension coordinates are usually eager even if data is lazy,
-                    # but we check is_lazy(lon) above to be sure.
-                    # If we are here, it means it reported as lazy.
-                    lon_for_check = None
-                else:
+                # 2. Check eager values (prioritizing Xarray indexes)
+                lon_min, lon_max, is_eager = _get_min_max_lazy_aware(lon)
+
+                if not is_eager:
                     # Lazy 2D or non-dimension 1D coordinate.
                     # Aero Protocol: Avoid hidden computes.
-                    # We emit a warning if we are forced to compute to detect periodicity.
+                    # We only trigger a compute if we are on the driver and it's absolutely necessary.
                     import warnings
 
                     warnings.warn(
@@ -2063,25 +2056,18 @@ class Regridder:
                         "To avoid this, provide 'periodic' explicitly in Regridder constructor "
                         "or set the 'boundary' attribute to 'periodic' in your longitude coordinate."
                     )
-                    try:
-                        # Sample the first row to check extent cheaply without triggering a full compute.
-                        if lon.ndim == 2:
-                            lon_for_check = lon.isel({lon.dims[0]: 0}).compute()
-                        else:
-                            lon_for_check = lon.compute()
-                    except Exception:
-                        lon_for_check = None
+                    import dask
 
-                if lon_for_check is not None:
-                    lon_min = float(lon_for_check.min())
-                    lon_max = float(lon_for_check.max())
-                    extent = lon_max - lon_min
-                    # ESMF periodic grids must have extent strictly less than 360
-                    # because the periodicity is handled by connecting the last point to the first.
-                    # If extent is 360, the last point is a duplicate of the first and ESMF will fail.
-                    # Use a tighter bound (354 degrees) to avoid false positives for regional swaths.
-                    if 354.0 <= extent < 360.0:
-                        return True
+                    results = dask.compute({"min": lon_min, "max": lon_max})[0]
+                    lon_min, lon_max = results["min"], results["max"]
+
+                extent = float(lon_max) - float(lon_min)
+                # ESMF periodic grids must have extent strictly less than 360
+                # because the periodicity is handled by connecting the last point to the first.
+                # If extent is 360, the last point is a duplicate of the first and ESMF will fail.
+                # Use a tighter bound (354 degrees) to avoid false positives for regional swaths.
+                if 354.0 <= extent < 360.0:
+                    return True
 
                 # 3. Last fallback: Check dimension name
                 if "lon" in lon.dims or "longitude" in lon.dims:
