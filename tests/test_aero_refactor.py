@@ -47,6 +47,7 @@ def test_create_grid_like_lazy():
     # Check lineage in history
     assert "Created grid like input" in grid_new.attrs["history"]
 
+
 def test_create_grid_like_lazy_2d():
     """
     Verify that create_grid_like works with lazy 2D coordinates.
