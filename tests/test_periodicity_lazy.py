@@ -13,7 +13,7 @@ def test_detect_periodicity_eager_2d():
     ds = create_global_grid(res_lat=10, res_lon=10)
     # Convert 1D coords to 2D
     lon_2d, lat_2d = xr.broadcast(ds.lon, ds.lat)
-    ds_2d = xr.Dataset(
+    ds_2d_coarse = xr.Dataset(
         coords={
             "lat": (["lat", "lon"], lat_2d.data),
             "lon": (["lat", "lon"], lon_2d.data),
@@ -21,6 +21,8 @@ def test_detect_periodicity_eager_2d():
     )
 
     regridder = Regridder.__new__(Regridder)
+    # coarsened extent = 355 - 5 = 350.
+    assert regridder._detect_periodicity(ds_2d_coarse) is False
 
     # extent = 355 - 5 = 350.
     # 354 <= 350 < 360 is False.
