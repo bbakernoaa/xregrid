@@ -1130,6 +1130,59 @@ def create_rotated_latlon_grid(
     return ds
 
 
+def _get_min_max_lazy_aware(da_coord: xr.DataArray) -> Tuple[Any, Any, bool]:
+    """
+    Helper to get min/max from a coordinate DataArray efficiently.
+
+    Prioritizes Xarray indexes for 1D dimension coordinates (eager) and uses
+    edge/corner sampling for 2D lazy coordinates to avoid OOM or slow
+    driver-side full array scans.
+
+    Parameters
+    ----------
+    da_coord : xr.DataArray
+        The coordinate DataArray to inspect.
+
+    Returns
+    -------
+    min : scalar or dask scalar
+        The minimum value.
+    max : scalar or dask scalar
+        The maximum value.
+    is_eager : bool
+        True if the returned values are already computed.
+    """
+    # 1. Check if it's already in memory (dimension coordinates or NumPy-backed)
+    if not is_lazy(da_coord):
+        return float(da_coord.min()), float(da_coord.max()), True
+
+    # 2. Check if it's a dimension coordinate in indexes
+    if (
+        da_coord.ndim == 1
+        and da_coord.name in da_coord.dims
+        and da_coord.name in da_coord.indexes
+    ):
+        idx = da_coord.indexes[da_coord.name]
+        return float(idx.min()), float(idx.max()), True
+
+    # 3. Corner/Edge sampling heuristic for 2D lazy coordinates to avoid full scan
+    if da_coord.ndim == 2:
+        # Curvilinear grids are typically monotonic along edges.
+        # Sampling edges is much faster than a full array scan.
+        edges = [
+            da_coord.isel({da_coord.dims[0]: 0}),
+            da_coord.isel({da_coord.dims[0]: -1}),
+            da_coord.isel({da_coord.dims[1]: 0}),
+            da_coord.isel({da_coord.dims[1]: -1}),
+        ]
+        # Use a dummy dimension for concatenation
+        combined_edges = xr.concat(edges, dim="_pts")
+        return combined_edges.min(), combined_edges.max(), False
+
+    # Fallback: return Dask scalars for later batch compute
+    return da_coord.min(), da_coord.max(), False
+
+
 def create_grid_like(
     obj: Union[xr.DataArray, xr.Dataset],
     res: Union[float, Tuple[float, float]],
@@ -1246,38 +1299,6 @@ def create_grid_like(
 
     # Discovery logic: we need min/max. We use batch compute if lazy to minimize roundtrips.
     # Aero-Optimization: Use Xarray indexes for 1D dimension coordinates to avoid hidden computes.
-
-    def _get_min_max_lazy_aware(da_coord):
-        """Helper to get min/max from a coordinate DataArray efficiently."""
-        # 1. Check if it's already in memory (dimension coordinates or NumPy-backed)
-        if not is_lazy(da_coord):
-            return float(da_coord.min()), float(da_coord.max()), True
-
-        # 2. Check if it's a dimension coordinate in indexes
-        if (
-            da_coord.ndim == 1
-            and da_coord.name in da_coord.dims
-            and da_coord.name in da_coord.indexes
-        ):
-            idx = da_coord.indexes[da_coord.name]
-            return float(idx.min()), float(idx.max()), True
-
-        # 3. Corner/Edge sampling heuristic for 2D lazy coordinates to avoid full scan
-        if da_coord.ndim == 2:
-            # Curvilinear grids are typically monotonic along edges.
-            # Sampling edges is much faster than a full array scan.
-            edges = [
-                da_coord.isel({da_coord.dims[0]: 0}),
-                da_coord.isel({da_coord.dims[0]: -1}),
-                da_coord.isel({da_coord.dims[1]: 0}),
-                da_coord.isel({da_coord.dims[1]: -1}),
-            ]
-            # Use a dummy dimension for concatenation
-            combined_edges = xr.concat(edges, dim="_pts")
-            return combined_edges.min(), combined_edges.max(), False
-
-        # Fallback: return Dask scalars for later batch compute
-        return da_coord.min(), da_coord.max(), False
 
     # 1. Try to find projected coordinates
     try:

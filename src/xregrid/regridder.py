@@ -9,7 +9,13 @@ import numpy as np
 import xarray as xr
 from scipy.sparse import coo_matrix
 
-from xregrid.utils import update_history, get_crs_info, is_lazy, is_dask, is_cubed
+from xregrid.utils import (
+    update_history,
+    get_crs_info,
+    is_dask,
+    is_cubed,
+    _get_min_max_lazy_aware,
+)
 from xregrid.constants import (
     get_regrid_method_map,
     get_extrap_method_map,
@@ -2042,39 +2048,40 @@ class Regridder:
                 if lon.attrs.get("boundary") == "periodic":
                     return True
 
-                # 2. Check eager values (dimension coordinates are eager in xarray)
-                lon_for_check = None
-                if not is_lazy(lon):
-                    # Already in memory
-                    lon_for_check = lon
-                elif lon.ndim == 1 and lon.name in lon.dims:
-                    # Xarray dimension coordinates are usually eager even if data is lazy,
-                    # but we check is_lazy(lon) above to be sure.
-                    # If we are here, it means it reported as lazy.
-                    lon_for_check = None
+                # 2. Check values using lazy-aware discovery
+                lon_min_task, lon_max_task, is_eager = _get_min_max_lazy_aware(lon)
+
+                if is_eager:
+                    lon_min, lon_max = float(lon_min_task), float(lon_max_task)
                 else:
                     # Lazy 2D or non-dimension 1D coordinate.
-                    # Aero Protocol: Avoid hidden computes.
-                    # We emit a warning if we are forced to compute to detect periodicity.
+                    # Aero Protocol: Avoid hidden computes by using the edge-sampling heuristic
+                    # provided by _get_min_max_lazy_aware.
                     import warnings
 
                     warnings.warn(
-                        f"Triggering hidden compute in _detect_periodicity for lazy coordinate '{lon.name}'. "
+                        f"Triggering sampled compute in _detect_periodicity for lazy coordinate '{lon.name}'. "
                         "To avoid this, provide 'periodic' explicitly in Regridder constructor "
                         "or set the 'boundary' attribute to 'periodic' in your longitude coordinate."
                     )
                     try:
-                        # Sample the first row to check extent cheaply without triggering a full compute.
-                        if lon.ndim == 2:
-                            lon_for_check = lon.isel({lon.dims[0]: 0}).compute()
+                        # Use xarray's compute to remain backend-agnostic
+                        # if the tasks are xarray/dask objects.
+                        if hasattr(lon_min_task, "compute"):
+                            lon_min = lon_min_task.compute()
                         else:
-                            lon_for_check = lon.compute()
-                    except Exception:
-                        lon_for_check = None
+                            lon_min = lon_min_task
 
-                if lon_for_check is not None:
-                    lon_min = float(lon_for_check.min())
-                    lon_max = float(lon_for_check.max())
+                        if hasattr(lon_max_task, "compute"):
+                            lon_max = lon_max_task.compute()
+                        else:
+                            lon_max = lon_max_task
+
+                        lon_min, lon_max = float(lon_min), float(lon_max)
+                    except Exception:
+                        lon_min = lon_max = None
+
+                if lon_min is not None and lon_max is not None:
                     extent = lon_max - lon_min
                     # ESMF periodic grids must have extent strictly less than 360
                     # because the periodicity is handled by connecting the last point to the first.
