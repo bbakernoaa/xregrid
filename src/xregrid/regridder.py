@@ -2060,7 +2060,7 @@ class Regridder:
                     import warnings
 
                     warnings.warn(
-                        f"Triggering sampled compute in _detect_periodicity for lazy coordinate '{lon.name}'. "
+                        f"Triggering hidden compute in _detect_periodicity for lazy coordinate '{lon.name}'. "
                         "To avoid this, provide 'periodic' explicitly in Regridder constructor "
                         "or set the 'boundary' attribute to 'periodic' in your longitude coordinate."
                     )
