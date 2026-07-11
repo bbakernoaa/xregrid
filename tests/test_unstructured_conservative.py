@@ -98,13 +98,22 @@ def test_unstructured_conservative_weight_scaling():
         np.testing.assert_allclose(res_lazy.compute().values, np.ones(4), rtol=1e-5)
 
     # 3. Parallel Dask Path
-    # Use 1 worker in thread-based mode (processes=False) to avoid fork-safety issues
-    # with the underlying ESMF C library, while still verifying the full parallel Dask path.
     import dask.distributed
+    import multiprocessing
 
-    cluster = dask.distributed.LocalCluster(
-        n_workers=1, threads_per_worker=1, processes=False
-    )
+    if is_mock:
+        # Start a local in-process cluster so mock esmpy module is inherited by the workers
+        cluster = dask.distributed.LocalCluster(
+            n_workers=1, threads_per_worker=1, processes=False
+        )
+    else:
+        # Set start method to 'spawn' for fork-safe/thread-safe process spawning with real ESMF
+        try:
+            multiprocessing.set_start_method("spawn", force=True)
+        except RuntimeError:
+            pass
+        cluster = dask.distributed.LocalCluster(n_workers=2, processes=True)
+
     client = dask.distributed.Client(cluster)
     try:
         regridder_parallel = Regridder(
