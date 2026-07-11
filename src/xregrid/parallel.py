@@ -277,6 +277,31 @@ def _compute_chunk_weights(
 
         weights = regrid.get_weights_dict(deep_copy=True)
 
+        # Map to original indices and scale weights if Mesh elements were triangulated.
+        # ESMF computes conservative weights using the triangulated element areas
+        # as the denominator, which silently multiplies the weights when mapped back.
+        if dst_orig_idx is not None and method == "conservative":
+            dst_field.get_area()
+            dst_areas = np.asarray(dst_field.data)
+            n_dst = int(np.max(dst_orig_idx) + 1) if len(dst_orig_idx) > 0 else 0
+            orig_dst_areas = np.bincount(
+                dst_orig_idx, weights=dst_areas, minlength=n_dst
+            )
+
+            # Avoid division by zero
+            scale_factors = np.zeros_like(dst_areas)
+            valid = orig_dst_areas[dst_orig_idx] > 0
+            scale_factors[valid] = (
+                dst_areas[valid] / orig_dst_areas[dst_orig_idx][valid]
+            )
+
+            row_dst_idx = weights["row_dst"] - 1
+            weights["weights"] = weights["weights"] * scale_factors[row_dst_idx]
+            weights["row_dst"] = dst_orig_idx[row_dst_idx] + 1
+
+        if src_orig_idx is not None and method == "conservative":
+            weights["col_src"] = src_orig_idx[weights["col_src"] - 1] + 1
+
         # 5. Dask Resource Hygiene: Destroy temporary ESMF objects
         # We don't destroy src_field because it's cached.
         regrid.destroy()
@@ -304,12 +329,6 @@ def _compute_chunk_weights(
 
         row_dst = weights["row_dst"] - 1
         col_src = weights["col_src"] - 1
-
-        if dst_orig_idx is not None and method == "conservative":
-            row_dst = dst_orig_idx[row_dst]
-
-        if src_orig_idx is not None and method == "conservative":
-            col_src = src_orig_idx[col_src]
 
         rows = global_indices[row_dst]
         cols = col_src

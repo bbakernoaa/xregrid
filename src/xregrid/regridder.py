@@ -585,14 +585,33 @@ class Regridder:
 
         weights = regrid.get_weights_dict(deep_copy=True)
 
-        # Map to original indices if Mesh elements were triangulated
+        # Map to original indices and scale weights if Mesh elements were triangulated.
+        # ESMF computes conservative weights using the triangulated element areas
+        # as the denominator, which silently multiplies the weights when mapped back.
+        if dst_orig_idx is not None and self.method == "conservative":
+            dst_field.get_area()
+            dst_areas = np.asarray(dst_field.data)
+            n_dst = int(np.prod(self._shape_target))
+            orig_dst_areas = np.bincount(
+                dst_orig_idx, weights=dst_areas, minlength=n_dst
+            )
+
+            # Avoid division by zero
+            scale_factors = np.zeros_like(dst_areas)
+            valid = orig_dst_areas[dst_orig_idx] > 0
+            scale_factors[valid] = (
+                dst_areas[valid] / orig_dst_areas[dst_orig_idx][valid]
+            )
+
+            row_dst_idx = weights["row_dst"] - 1
+            weights["weights"] = weights["weights"] * scale_factors[row_dst_idx]
+            weights["row_dst"] = dst_orig_idx[row_dst_idx] + 1
+
+        if src_orig_idx is not None and self.method == "conservative":
+            weights["col_src"] = src_orig_idx[weights["col_src"] - 1] + 1
+
         row_dst = weights["row_dst"] - 1
         col_src = weights["col_src"] - 1
-
-        if dst_orig_idx is not None and self.method == "conservative":
-            row_dst = dst_orig_idx[row_dst]
-        if src_orig_idx is not None and self.method == "conservative":
-            col_src = src_orig_idx[col_src]
 
         # Handle MPI gathering if multiple ranks are present
         pet_count = esmpy.pet_count()
@@ -614,14 +633,8 @@ class Regridder:
                     for i, w in enumerate(all_weights):
                         r = w["row_dst"] - 1
                         c = w["col_src"] - 1
-                        # Note: orig_idx is not easily gathered via ESMF weights dict
-                        # but here we are in serial-equivalent rank 0 gathering.
-                        # Actually, each rank might have different triangulation?
-                        # No, triangulation should be deterministic.
-                        if dst_orig_idx is not None:
-                            r = dst_orig_idx[r]
-                        if src_orig_idx is not None:
-                            c = src_orig_idx[c]
+                        # Note: we already mapped and scaled the weights locally on each PET,
+                        # so we DO NOT need to apply dst_orig_idx or src_orig_idx here!
                         rows.append(r)
                         cols.append(c)
                         data.append(w["weights"])

@@ -78,11 +78,14 @@ def setup_esmpy_mock():
         def __init__(self, *args, **kwargs):
             self.nodes = []
             self.elements = []
+            self.element_count = 0
 
         def add_nodes(self, *args, **kwargs):
             pass
 
         def add_elements(self, *args, **kwargs):
+            if args:
+                self.element_count = args[0]
             pass
 
         def destroy(self):
@@ -92,6 +95,13 @@ def setup_esmpy_mock():
         def __init__(self, *args, **kwargs):
             self.name = kwargs.get("name", "field")
             self.grid = args[0] if args else None
+            self.data = np.array([])
+
+        def get_area(self):
+            if self.grid is not None and hasattr(self.grid, "element_count"):
+                self.data = np.ones(self.grid.element_count)
+            else:
+                self.data = np.ones(100)
 
         def destroy(self):
             pass
