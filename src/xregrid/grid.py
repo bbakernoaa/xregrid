@@ -908,6 +908,9 @@ def _create_esmf_grid(
     """
     import esmpy
 
+    if isinstance(coord_sys, str):
+        coord_sys = get_coord_sys(coord_sys)
+
     non_spatial_dims = _get_non_spatial_dims(ds)
     lon, lat, shape, dims, is_unstructured = _get_mesh_info(
         ds, method=method, is_source=is_source

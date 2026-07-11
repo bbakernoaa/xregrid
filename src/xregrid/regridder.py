@@ -237,13 +237,16 @@ class Regridder:
             # SPH_DEG correctly handles both periodic and non-periodic spherical grids,
             # as well as rectilinear, curvilinear, and unstructured conventions.
             if is_geographic:
+                self._coord_sys_str = "SPH_DEG"
                 self._coord_sys = get_coord_sys("SPH_DEG")
             else:
+                self._coord_sys_str = "CART"
                 self._coord_sys = get_coord_sys("CART")
 
             self.method_map = get_regrid_method_map()
             self.extrap_method_map = get_extrap_method_map()
         else:
+            self._coord_sys_str = None
             self._coord_sys = None
             self.method_map = {}
             self.extrap_method_map = {}
@@ -485,7 +488,7 @@ class Regridder:
             self.method,
             periodic=self.periodic if is_source else False,
             mask_var=self.mask_var if is_source else None,
-            coord_sys=self._coord_sys,
+            coord_sys=self._coord_sys_str,
             is_source=is_source,
         )
 
@@ -758,7 +761,7 @@ class Regridder:
                     self.extrap_dist_exponent,
                     self.mask_var,
                     self.periodic,
-                    coord_sys=self._coord_sys,
+                    coord_sys=self._coord_sys_str,
                 )
                 futures.append(future)
         else:
@@ -813,7 +816,7 @@ class Regridder:
                         self.extrap_dist_exponent,
                         self.mask_var,
                         self.periodic,
-                        coord_sys=self._coord_sys,
+                        coord_sys=self._coord_sys_str,
                     )
                     futures.append(future)
 
