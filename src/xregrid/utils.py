@@ -35,6 +35,8 @@ def is_cubed(obj: Any) -> bool:
     """
     Check if an object is a cubed array or a Dataset/DataArray containing one.
 
+    Supports checking inside lists, tuples, and dictionaries.
+
     Parameters
     ----------
     obj : Any
@@ -52,10 +54,18 @@ def is_cubed(obj: Any) -> bool:
         return True
 
     if isinstance(obj, xr.DataArray):
-        return isinstance(obj.data, cubed.Array)
+        return hasattr(obj.data, "__array_namespace__") and "cubed" in str(
+            obj.data.__array_namespace__()
+        ) or isinstance(obj.data, cubed.Array)
 
     if isinstance(obj, xr.Dataset):
-        return any(isinstance(v.data, cubed.Array) for v in obj.data_vars.values())
+        return any(is_cubed(v) for v in obj.data_vars.values())
+
+    if isinstance(obj, (list, tuple)):
+        return any(is_cubed(item) for item in obj)
+
+    if isinstance(obj, dict):
+        return any(is_cubed(item) for item in obj.values())
 
     return False
 
@@ -106,6 +116,54 @@ def is_lazy(obj: Any) -> bool:
         True if the object is lazy.
     """
     return is_dask(obj) or is_cubed(obj)
+
+
+def _compute_lazy_aware(obj: Any) -> Any:
+    """
+    Compute lazy objects (Dask or Cubed) in a backend-agnostic way.
+
+    Supports single objects, lists, and dictionaries.
+
+    Parameters
+    ----------
+    obj : Any
+        The object(s) to compute.
+
+    Returns
+    -------
+    Any
+        The computed object(s).
+    """
+    # 1. Check for Cubed backend
+    if is_cubed(obj) and cubed is not None:
+        if isinstance(obj, dict):
+            keys = list(obj.keys())
+            vals = [obj[k] for k in keys]
+            computed_vals = cubed.compute(*vals)
+            return dict(zip(keys, computed_vals))
+        elif isinstance(obj, (list, tuple)):
+            res = cubed.compute(*obj)
+            return list(res) if isinstance(obj, list) else res
+        else:
+            return cubed.compute(obj)[0]
+
+    # 2. Check for Dask backend
+    if is_dask(obj) and dask is not None:
+        # Dask handles dicts and lists natively
+        res = dask.compute(obj)
+        return res[0] if len(res) == 1 else res
+
+    # 3. Fallback for objects with .compute() method (Backend-agnostic)
+    if hasattr(obj, "compute") and callable(obj.compute):
+        return obj.compute()
+
+    # 4. Handle non-lazy containers that might contain objects with .compute()
+    if isinstance(obj, list):
+        return [_compute_lazy_aware(item) for item in obj]
+    if isinstance(obj, dict):
+        return {k: _compute_lazy_aware(v) for k, v in obj.items()}
+
+    return obj
 
 
 def _get_array_namespace(*objs: Any) -> Any:
@@ -1327,7 +1385,7 @@ def create_grid_like(
                     tasks_dict["ymin"] = y_min
                     tasks_dict["ymax"] = y_max
 
-                results = dask.compute(tasks_dict)[0]
+                results = _compute_lazy_aware(tasks_dict)
                 extent = (
                     float(results.get("xmin", x_min)),
                     float(results.get("xmax", x_max)),
@@ -1361,7 +1419,7 @@ def create_grid_like(
                 if y_da.size > 1:
                     tasks_dict["res_y"] = abs(y_da.diff(y_da.dims[0]).mean())
 
-                results = dask.compute(tasks_dict)[0]
+                results = _compute_lazy_aware(tasks_dict)
                 x_min_val = float(results.get("x_min", x_min))
                 x_max_val = float(results.get("x_max", x_max))
                 y_min_val = float(results.get("y_min", y_min))
@@ -1436,7 +1494,7 @@ def create_grid_like(
                     tasks_dict["lon_min"] = lon_min
                     tasks_dict["lon_max"] = lon_max
 
-                results = dask.compute(tasks_dict)[0]
+                results = _compute_lazy_aware(tasks_dict)
                 lat_range = (
                     float(results.get("lat_min", lat_min)),
                     float(results.get("lat_max", lat_max)),
@@ -1472,7 +1530,7 @@ def create_grid_like(
                 if lon_da.size > 1:
                     tasks_dict["res_lon"] = abs(lon_da.diff(lon_da.dims[-1]).mean())
 
-                results = dask.compute(tasks_dict)[0]
+                results = _compute_lazy_aware(tasks_dict)
                 lat_min_val = float(results.get("lat_min", lat_min))
                 lat_max_val = float(results.get("lat_max", lat_max))
                 lon_min_val = float(results.get("lon_min", lon_min))
