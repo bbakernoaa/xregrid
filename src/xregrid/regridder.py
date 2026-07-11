@@ -2068,7 +2068,9 @@ class Regridder:
                     try:
                         # Aero Protocol: Use centralized backend-agnostic compute
                         # to resolve sampled longitude edges.
-                        res = _compute_lazy_aware({"min": lon_min_task, "max": lon_max_task})
+                        res = _compute_lazy_aware(
+                            {"min": lon_min_task, "max": lon_max_task}
+                        )
                         lon_min, lon_max = float(res["min"]), float(res["max"])
                     except Exception:
                         lon_min = lon_max = None

@@ -54,9 +54,11 @@ def is_cubed(obj: Any) -> bool:
         return True
 
     if isinstance(obj, xr.DataArray):
-        return hasattr(obj.data, "__array_namespace__") and "cubed" in str(
-            obj.data.__array_namespace__()
-        ) or isinstance(obj.data, cubed.Array)
+        return (
+            hasattr(obj.data, "__array_namespace__")
+            and "cubed" in str(obj.data.__array_namespace__())
+            or isinstance(obj.data, cubed.Array)
+        )
 
     if isinstance(obj, xr.Dataset):
         return any(is_cubed(v) for v in obj.data_vars.values())

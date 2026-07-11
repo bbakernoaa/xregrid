@@ -2,20 +2,19 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
-import xarray as xr
-from xregrid.utils import _compute_lazy_aware, is_lazy, is_dask, is_cubed
+from xregrid.utils import _compute_lazy_aware, is_lazy, is_dask
 
 try:
     import dask.array as da
+
     HAS_DASK = True
 except ImportError:
     HAS_DASK = False
 
-try:
-    import cubed
-    HAS_CUBED = True
-except ImportError:
-    HAS_CUBED = False
+import importlib.util
+
+HAS_DASK = importlib.util.find_spec("dask") is not None
+HAS_CUBED = importlib.util.find_spec("cubed") is not None
 
 
 def test_compute_lazy_aware_numpy():
@@ -25,12 +24,14 @@ def test_compute_lazy_aware_numpy():
     assert np.array_equal(res, data)
     assert not is_lazy(res)
 
+
 def test_compute_lazy_aware_dict_numpy():
     """Verify compute_lazy_aware handles dicts of eager data."""
     data = {"a": np.array([1]), "b": 2}
     res = _compute_lazy_aware(data)
     assert res == data
     assert res["a"] is data["a"]
+
 
 @pytest.mark.skipif(not HAS_DASK, reason="Dask not installed")
 def test_compute_lazy_aware_dask():
@@ -41,6 +42,7 @@ def test_compute_lazy_aware_dask():
     res = _compute_lazy_aware(dask_arr)
     assert np.array_equal(res, np.array([1, 2, 3]))
     assert not is_lazy(res)
+
 
 @pytest.mark.skipif(not HAS_DASK, reason="Dask not installed")
 def test_compute_lazy_aware_dask_dict():
@@ -53,16 +55,6 @@ def test_compute_lazy_aware_dask_dict():
     assert res["b"] == 2
     assert not is_lazy(res["a"])
 
-class MockCubedArray:
-    """Minimal mock for a Cubed array."""
-    def __init__(self, data):
-        self.data = data
-        # To satisfy is_cubed
-        import cubed
-        self.__class__ = cubed.Array
-
-    def compute(self, **kwargs):
-        return self.data
 
 @pytest.mark.skipif(not HAS_CUBED, reason="Cubed not installed")
 def test_compute_lazy_aware_cubed_mock(monkeypatch):
@@ -93,8 +85,10 @@ def test_compute_lazy_aware_cubed_mock(monkeypatch):
     res = _compute_lazy_aware(obj)
     assert np.array_equal(res, data_val)
 
+
 def test_compute_lazy_aware_generic_compute():
     """Verify compute_lazy_aware handles objects with a .compute() method."""
+
     class GenericLazy:
         def compute(self):
             return "computed"
@@ -102,6 +96,7 @@ def test_compute_lazy_aware_generic_compute():
     obj = GenericLazy()
     res = _compute_lazy_aware(obj)
     assert res == "computed"
+
 
 if __name__ == "__main__":
     pytest.main([__file__])
