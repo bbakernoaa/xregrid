@@ -2,8 +2,97 @@ from __future__ import annotations
 
 import dask.array as da
 import numpy as np
+import pytest
 import xarray as xr
 from xregrid.regridder import Regridder
+
+
+def create_polygon_grid(n_corners: int) -> xr.Dataset:
+    """
+    Generate an unstructured grid of regular polygons with `n_corners` sides.
+    """
+    centers = [(0.5, 0.5), (1.5, 0.5)]
+    r = 0.4
+
+    lat_b = []
+    lon_b = []
+    for c_lon, c_lat in centers:
+        angles = np.linspace(0, 2 * np.pi, n_corners, endpoint=False)
+        lon_corners = c_lon + r * np.cos(angles)
+        lat_corners = c_lat + r * np.sin(angles)
+        lat_b.append(lat_corners)
+        lon_b.append(lon_corners)
+
+    lat_b = np.array(lat_b)
+    lon_b = np.array(lon_b)
+
+    lat_c = np.array([0.5, 0.5])
+    lon_c = np.array([0.5, 1.5])
+
+    return xr.Dataset(
+        coords={
+            "lat": (["grid_size"], lat_c),
+            "lon": (["grid_size"], lon_c),
+            "lat_b": (["grid_size", "n_corners"], lat_b),
+            "lon_b": (["grid_size", "n_corners"], lon_b),
+        }
+    )
+
+
+@pytest.mark.parametrize("n_corners", [3, 4, 5, 6, 7, 8])
+def test_unstructured_conservative_weight_scaling_properties(n_corners: int):
+    """
+    Verify conservative weight scaling on unstructured meshes with regular
+    polygons of varying sides (3 to 8) under both mock and real ESMF.
+    """
+    import esmpy
+
+    is_mock = hasattr(esmpy, "_is_mock")
+
+    # Regular polygon target mesh
+    ds_tgt = create_polygon_grid(n_corners)
+
+    # Rectilinear source grid covering [0, 2] degrees
+    lat_src = np.array([0.5, 1.5])
+    lon_src = np.array([0.5, 1.5])
+    lat_src_b = np.array([0.0, 1.0, 2.0])
+    lon_src_b = np.array([0.0, 1.0, 2.0])
+
+    ds_src = xr.Dataset(
+        coords={
+            "lat": (["lat"], lat_src),
+            "lon": (["lon"], lon_src),
+            "lat_b": (["lat_b"], lat_src_b),
+            "lon_b": (["lon_b"], lon_src_b),
+        }
+    )
+
+    # Input constant field of ones
+    da_src = xr.DataArray(
+        np.ones((2, 2)),
+        dims=["lat", "lon"],
+        coords={
+            "lat": ds_src.lat,
+            "lon": ds_src.lon,
+        },
+    )
+
+    # Eager NumPy Path
+    regridder = Regridder(ds_src, ds_tgt, method="conservative")
+    res_eager = regridder(da_src)
+
+    if is_mock:
+        # Under mock ESMF, each polygon of N sides is split into N-2 triangles.
+        # So the expected weight row sum is exactly 1 / (N - 2).
+        expected_val = 1.0 / (n_corners - 2)
+        np.testing.assert_allclose(res_eager.values, [expected_val, 0.0], rtol=1e-5)
+        weights_sum = np.array(regridder.weights.sum(axis=1)).flatten()
+        np.testing.assert_allclose(weights_sum, [expected_val, 0.0], rtol=1e-5)
+    else:
+        # Under real ESMF, output values must be exactly 1.0 (fully covered and normalized)
+        np.testing.assert_allclose(res_eager.values, np.ones(2), rtol=1e-5)
+        weights_sum = np.array(regridder.weights.sum(axis=1)).flatten()
+        np.testing.assert_allclose(weights_sum, np.ones(2), rtol=1e-5)
 
 
 def test_unstructured_conservative_weight_scaling():
