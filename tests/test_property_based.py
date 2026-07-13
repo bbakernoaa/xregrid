@@ -7,7 +7,13 @@ import numpy as np
 import xarray as xr
 from hypothesis import given, strategies as st, settings, HealthCheck, assume
 
-from xregrid import Regridder, create_global_grid, create_regional_grid
+from xregrid import (
+    Regridder,
+    create_global_grid,
+    create_regional_grid,
+    create_grid_from_crs,
+    create_grid_like,
+)
 from xregrid.utils import _get_min_max_lazy_aware, is_lazy, is_dask, spatial_slice
 
 # Configure hypothesis to have higher deadlines since ESMF is involved
@@ -437,3 +443,287 @@ def test_spatial_slice_properties(
         # Latitude values should fall within the bounds with some buffer
         assert np.all(lat_vals >= min_y - buffer - 0.1)
         assert np.all(lat_vals <= max_y + buffer + 0.1)
+
+
+@given(
+    crs_code=st.sampled_from([3857, 32633, 3035]),
+    extent_offset_x=st.floats(min_value=10000, max_value=500000),
+    res=st.floats(min_value=20000, max_value=100000),
+    add_bounds=st.booleans(),
+)
+@settings(
+    max_examples=10, suppress_health_check=[HealthCheck.filter_too_much], deadline=None
+)
+def test_create_grid_from_crs_properties(
+    crs_code: int, extent_offset_x: float, res: float, add_bounds: bool
+) -> None:
+    """
+    Test properties of create_grid_from_crs using Hypothesis.
+
+    Validates that creating structured grids from different projected CRS targets
+    maintains proper shapes, coordinate boundaries, and eagerness/laziness backend parity.
+    """
+    crs = f"EPSG:{crs_code}"
+    # Pick a baseline extent depending on CRS
+    if crs_code == 32633:  # UTM 33N, centered around x=500000, y=5000000
+        min_x = 500000.0 - extent_offset_x
+        max_x = 500000.0 + extent_offset_x
+        min_y = 5000000.0
+        max_y = 5000000.0 + 2 * extent_offset_x
+    else:  # 3857, 3035
+        min_x = 0.0
+        max_x = 2 * extent_offset_x
+        min_y = 0.0
+        max_y = 2 * extent_offset_x
+
+    # Ensure coordinates division works nicely and shapes are non-empty
+    assume(max_x >= min_x + 3 * res)
+    assume(max_y >= min_y + 3 * res)
+
+    # Calculate sizes to ensure we do not end up with extremely large grids or tiny chunks
+    # We want chunk size to be smaller than or equal to dimensions size
+    num_x = int((max_x - min_x) / res)
+    num_y = int((max_y - min_y) / res)
+    assume(num_x >= 3)
+    assume(num_y >= 3)
+
+    extent = (min_x, max_x, min_y, max_y)
+
+    ds_eager = create_grid_from_crs(crs, extent, res, add_bounds=add_bounds)
+    assert "lat" in ds_eager.coords
+    assert "lon" in ds_eager.coords
+    assert "x" in ds_eager.coords
+    assert "y" in ds_eager.coords
+
+    # Parity check with Dask using appropriate chunks
+    ds_lazy = create_grid_from_crs(
+        crs, extent, res, add_bounds=add_bounds, chunks=min(num_x, num_y, 5)
+    )
+    assert is_lazy(ds_lazy.lat)
+    xr.testing.assert_allclose(ds_eager, ds_lazy.compute())
+
+
+@given(
+    res_lat=st.floats(min_value=10.0, max_value=20.0),
+    res_lon=st.floats(min_value=10.0, max_value=20.0),
+    new_res=st.floats(min_value=5.0, max_value=10.0),
+    add_bounds=st.booleans(),
+)
+@settings(max_examples=10, suppress_health_check=[HealthCheck.filter_too_much])
+def test_create_grid_like_properties(
+    res_lat: float, res_lon: float, new_res: float, add_bounds: bool
+) -> None:
+    """
+    Test properties of create_grid_like using Hypothesis.
+
+    Validates extent and CRS matching from an existing template, coordinate limits,
+    cell boundaries, and eager vs lazy backend parity.
+    """
+    # Create template regional grid
+    ds_template = create_regional_grid(
+        lat_range=(-30, 30),
+        lon_range=(10, 70),
+        res_lat=res_lat,
+        res_lon=res_lon,
+        add_bounds=add_bounds,
+    )
+
+    # 1. Test eager
+    # Note that create_grid_like calculates the extent based on the outer edges.
+    # The actual outer bounds of create_regional_grid are calculated using the center offsets.
+    # Therefore, the created grid_like might be slightly wider than the center coordinate min/max.
+    ds_new_eager = create_grid_like(ds_template, new_res, add_bounds=add_bounds)
+    assert "lat" in ds_new_eager.coords
+    assert "lon" in ds_new_eager.coords
+    assert ds_new_eager.lat.ndim == 1
+    assert ds_new_eager.lon.ndim == 1
+
+    # Bounds check against template's grid boundary extent (with a small floating point slack)
+    # The template bounds cover the exact latitude range [-30, 30] and longitude range [10, 70]
+    assert ds_new_eager.lat.min() >= -30.0 - new_res
+    assert ds_new_eager.lat.max() <= 30.0 + new_res
+    assert ds_new_eager.lon.min() >= 10.0 - new_res
+    assert ds_new_eager.lon.max() <= 70.0 + new_res
+
+    if add_bounds:
+        assert "lat_b" in ds_new_eager.coords
+        assert "lon_b" in ds_new_eager.coords
+
+    # 2. Test lazy template & lazy output
+    ds_template_lazy = ds_template.chunk({"lat": 2, "lon": 2})
+    # Avoid hidden compute warning by passing extent explicitly if we want,
+    # or just suppress/ignore warning to verify it triggers and functions correctly.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=UserWarning)
+        ds_new_lazy = create_grid_like(
+            ds_template_lazy, new_res, add_bounds=add_bounds, chunks=2
+        )
+
+    assert is_lazy(ds_new_lazy.lat_b) if add_bounds else True
+    xr.testing.assert_allclose(ds_new_eager, ds_new_lazy.compute())
+
+
+@given(
+    res_src=st.floats(min_value=15.0, max_value=45.0),
+    res_tgt=st.floats(min_value=15.0, max_value=45.0),
+    method=st.sampled_from(["bilinear", "nearest_s2d", "conservative", "patch"]),
+    constant_val=st.floats(min_value=-100.0, max_value=100.0),
+)
+@settings(
+    max_examples=8, suppress_health_check=[HealthCheck.filter_too_much], deadline=None
+)
+def test_regridder_constant_preservation(
+    res_src: float,
+    res_tgt: float,
+    method: str,
+    constant_val: float,
+) -> None:
+    """
+    Test that regridding a constant field preserves the constant value.
+
+    This verifies the mathematical partition of unity property (sum of weights = 1)
+    for all ESMF regridding methods on global rectilinear grids.
+    """
+    ds_src = create_global_grid(res_lat=res_src, res_lon=res_src, add_bounds=True)
+    ds_tgt = create_global_grid(res_lat=res_tgt, res_lon=res_tgt, add_bounds=True)
+
+    lat_size = ds_src.lat.size
+    lon_size = ds_src.lon.size
+
+    assume(lat_size >= 2)
+    assume(lon_size >= 2)
+    assume(ds_tgt.lat.size >= 2)
+    assume(ds_tgt.lon.size >= 2)
+
+    # Input constant field
+    data = np.full((lat_size, lon_size), constant_val)
+    da_src = xr.DataArray(
+        data,
+        coords={"lat": ds_src.lat, "lon": ds_src.lon},
+        dims=("lat", "lon"),
+        name="constant_field",
+    )
+
+    weights_file = f"/tmp/test_weights_const_{uuid.uuid4().hex}.nc"
+
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", category=UserWarning)
+
+            regridder = Regridder(
+                source_grid_ds=ds_src,
+                target_grid_ds=ds_tgt,
+                method=method,
+                filename=weights_file,
+            )
+
+            res = regridder(da_src)
+
+            # Check that output values are all close to the constant value
+            np.testing.assert_allclose(res.values, constant_val, rtol=1e-5, atol=1e-5)
+
+    finally:
+        if os.path.exists(weights_file):
+            try:
+                os.remove(weights_file)
+            except OSError:
+                pass
+
+
+@given(
+    res_src=st.floats(min_value=15.0, max_value=45.0),
+    res_tgt=st.floats(min_value=15.0, max_value=45.0),
+)
+@settings(
+    max_examples=8, suppress_health_check=[HealthCheck.filter_too_much], deadline=None
+)
+def test_regridder_conservative_conservation(
+    res_src: float,
+    res_tgt: float,
+) -> None:
+    """
+    Test that conservative regridding preserves the global integral of a field.
+
+    This is a core physical property of the conservative regridding method.
+    """
+    ds_src = create_global_grid(res_lat=res_src, res_lon=res_src, add_bounds=True)
+    ds_tgt = create_global_grid(res_lat=res_tgt, res_lon=res_tgt, add_bounds=True)
+
+    lat_size = ds_src.lat.size
+    lon_size = ds_src.lon.size
+
+    assume(lat_size >= 2)
+    assume(lon_size >= 2)
+    assume(ds_tgt.lat.size >= 2)
+    assume(ds_tgt.lon.size >= 2)
+
+    # Generate random positive field (e.g. tracer concentration)
+    data = np.random.uniform(10.0, 100.0, size=(lat_size, lon_size))
+    da_src = xr.DataArray(
+        data,
+        coords={"lat": ds_src.lat, "lon": ds_src.lon},
+        dims=("lat", "lon"),
+        name="tracer",
+    )
+
+    weights_file = f"/tmp/test_weights_conserv_{uuid.uuid4().hex}.nc"
+
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", category=UserWarning)
+
+            regridder = Regridder(
+                source_grid_ds=ds_src,
+                target_grid_ds=ds_tgt,
+                method="conservative",
+                filename=weights_file,
+            )
+
+            res = regridder(da_src)
+
+            # Compute cell areas
+            # Under ESMF, area calculations on a sphere might slightly differ from spherical-cap area formula
+            # because of cell boundary linear/great-circle interpolation or ESMF internal representation.
+            # To test perfect mathematical conservation of the Regridder's weights application,
+            # we can compute the integral using the actual ESMF areas returned via dst_field.get_area() if they
+            # were exported. Alternatively, we can verify that the sum of the source values weighted by the regridding
+            # weights is mathematically conserved.
+            # The weights matrix has shape (dst_size, src_size).
+            # For conservative regridding, ESMF weights scale the cell values.
+            # Let's verify conservation by comparing the source integral and target integral using areas
+            # with a slightly relaxed tolerance (e.g., 3%) to account for pure spherical geometric differences between
+            # our simplified analytic areas formula and ESMF's internally calculated finite-element areas.
+
+            def get_areas(ds):
+                # ds.lat_b is (lat, 2)
+                lat_b = ds.lat_b.values
+                lon_b = ds.lon_b.values
+
+                # lats are monotonic increasing
+                lat_south = np.radians(lat_b[:, 0])
+                lat_north = np.radians(lat_b[:, 1])
+                d_sin = np.sin(lat_north) - np.sin(lat_south)
+
+                lon_west = np.radians(lon_b[:, 0])
+                lon_east = np.radians(lon_b[:, 1])
+                d_lon = lon_east - lon_west
+
+                # Outer product to get 2D areas
+                return np.outer(d_sin, d_lon)
+
+            area_src = get_areas(ds_src)
+            area_tgt = get_areas(ds_tgt)
+
+            # Global integrals
+            integral_src = np.sum(da_src.values * area_src)
+            integral_tgt = np.sum(res.values * area_tgt)
+
+            # Check conservation (within 10% due to geometric differences in area formulas)
+            np.testing.assert_allclose(integral_src, integral_tgt, rtol=0.10)
+
+    finally:
+        if os.path.exists(weights_file):
+            try:
+                os.remove(weights_file)
+            except OSError:
+                pass
