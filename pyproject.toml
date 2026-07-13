@@ -32,6 +32,7 @@ test = [
     "pytest-mock",
     "pooch",
     "pre-commit",
+    "hypothesis",
 ]
 docs = [
     "zensical",

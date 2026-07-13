@@ -4,3 +4,4 @@ pytest-benchmark
 pytest-mock
 pooch
 pre-commit
+hypothesis

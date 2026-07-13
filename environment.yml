@@ -21,6 +21,7 @@ dependencies:
   - cartopy
   - pooch
   - pytest
+  - hypothesis
   - pip
   - pip:
     - -e .
