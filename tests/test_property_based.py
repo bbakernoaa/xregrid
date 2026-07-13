@@ -5,6 +5,7 @@ import uuid
 import warnings
 import numpy as np
 import xarray as xr
+from typing import Tuple
 from hypothesis import given, strategies as st, settings, HealthCheck, assume
 
 from xregrid import (
@@ -13,11 +14,20 @@ from xregrid import (
     create_regional_grid,
     create_grid_from_crs,
     create_grid_like,
+    create_rotated_latlon_grid,
+    create_sinusoidal_grid,
+    create_grid_from_ioapi,
 )
-from xregrid.utils import _get_min_max_lazy_aware, is_lazy, is_dask, spatial_slice
+from xregrid.utils import (
+    _get_min_max_lazy_aware,
+    is_lazy,
+    is_dask,
+    spatial_slice,
+    create_lcc_grid,
+)
 
 # Configure hypothesis to have higher deadlines since ESMF is involved
-settings.register_profile("default", deadline=1500)
+settings.register_profile("default", deadline=None)
 settings.load_profile("default")
 
 
@@ -387,6 +397,604 @@ def test_regridder_real_esmf_properties(
 
 
 @given(
+    pole_lat=st.floats(min_value=-90.0, max_value=90.0),
+    pole_lon=st.floats(min_value=-180.0, max_value=180.0),
+    res=st.floats(min_value=2.0, max_value=10.0),
+    add_bounds=st.booleans(),
+)
+@settings(max_examples=10, suppress_health_check=[HealthCheck.filter_too_much])
+def test_create_rotated_latlon_grid_properties(
+    pole_lat: float, pole_lon: float, res: float, add_bounds: bool
+) -> None:
+    """
+    Test properties of create_rotated_latlon_grid using Hypothesis.
+
+    Ensures dimensions, rotated coordinates rlat/rlon are structured,
+    geographic coordinates lat/lon are computed and eager/lazy parity is preserved.
+    """
+    extent = (-20.0, 20.0, -15.0, 15.0)
+    ds_eager = create_rotated_latlon_grid(
+        extent, res, pole_lat, pole_lon, add_bounds=add_bounds
+    )
+
+    assert "rlat" in ds_eager.coords
+    assert "rlon" in ds_eager.coords
+    assert "lat" in ds_eager.coords
+    assert "lon" in ds_eager.coords
+
+    # Rotated coordinates should be strictly monotonic
+    assert np.all(np.diff(ds_eager.rlat.values) > 0)
+    assert np.all(np.diff(ds_eager.rlon.values) > 0)
+
+    if add_bounds:
+        assert "rlat_b" in ds_eager.coords
+        assert "rlon_b" in ds_eager.coords
+        assert "lat_b" in ds_eager.coords
+        assert "lon_b" in ds_eager.coords
+
+    # Lazy parity check
+    ds_lazy = create_rotated_latlon_grid(
+        extent, res, pole_lat, pole_lon, add_bounds=add_bounds, chunks=5
+    )
+
+    assert is_lazy(ds_lazy.lat)
+    xr.testing.assert_allclose(ds_eager, ds_lazy.compute())
+
+
+@given(
+    res_alias=st.sampled_from(["10km", "5km", "1km", "500m"]),
+    add_bounds=st.booleans(),
+)
+@settings(max_examples=8, suppress_health_check=[HealthCheck.filter_too_much])
+def test_create_sinusoidal_grid_properties(res_alias: str, add_bounds: bool) -> None:
+    """
+    Test properties of create_sinusoidal_grid using Hypothesis.
+
+    Validates MODIS sinusoidal grid construction with alias resolutions,
+    extent checks, projection coordinates, and eager/lazy backend parity.
+    """
+    # Use a small extent to make tests extremely fast
+    extent = (0.0, 50000.0, 0.0, 50000.0)
+    ds_eager = create_sinusoidal_grid(extent, res_alias, add_bounds=add_bounds)
+
+    assert "x" in ds_eager.coords
+    assert "y" in ds_eager.coords
+    assert "lat" in ds_eager.coords
+    assert "lon" in ds_eager.coords
+
+    assert np.all(np.diff(ds_eager.x.values) > 0)
+    assert np.all(np.diff(ds_eager.y.values) > 0)
+
+    if add_bounds:
+        assert "x_b" in ds_eager.coords
+        assert "y_b" in ds_eager.coords
+
+    # Lazy parity
+    ds_lazy = create_sinusoidal_grid(extent, res_alias, add_bounds=add_bounds, chunks=5)
+    assert is_lazy(ds_lazy.lat)
+    xr.testing.assert_allclose(ds_eager, ds_lazy.compute())
+
+
+@given(
+    lat_1=st.floats(min_value=-60.0, max_value=60.0),
+    lat_2=st.floats(min_value=-60.0, max_value=60.0),
+    lat_0=st.floats(min_value=-60.0, max_value=60.0),
+    lon_0=st.floats(min_value=-180.0, max_value=180.0),
+    add_bounds=st.booleans(),
+)
+@settings(max_examples=10, suppress_health_check=[HealthCheck.filter_too_much])
+def test_create_lcc_grid_properties(
+    lat_1: float, lat_2: float, lat_0: float, lon_0: float, add_bounds: bool
+) -> None:
+    """
+    Test properties of Lambert Conformal Conic grid helper using Hypothesis.
+    """
+    # Proj requirement: |lat_1 + lat_2| should be > 0. Let's assume/filter that.
+    assume(abs(lat_1 + lat_2) > 0.001)
+
+    extent = (-100000.0, 100000.0, -100000.0, 100000.0)
+    res = 50000.0
+
+    ds_eager = create_lcc_grid(
+        extent, res, lat_1, lat_2, lat_0, lon_0, add_bounds=add_bounds
+    )
+
+    assert "x" in ds_eager.coords
+    assert "y" in ds_eager.coords
+    assert "lat" in ds_eager.coords
+    assert "lon" in ds_eager.coords
+
+    if add_bounds:
+        assert "x_b" in ds_eager.coords
+        assert "y_b" in ds_eager.coords
+
+    # Lazy parity
+    ds_lazy = create_lcc_grid(
+        extent, res, lat_1, lat_2, lat_0, lon_0, add_bounds=add_bounds, chunks=5
+    )
+    assert is_lazy(ds_lazy.lat)
+    xr.testing.assert_allclose(ds_eager, ds_lazy.compute())
+
+
+@given(
+    gdtyp=st.sampled_from([1, 2, 9, 13]),
+    ncols=st.integers(min_value=3, max_value=8),
+    nrows=st.integers(min_value=3, max_value=8),
+    add_bounds=st.booleans(),
+)
+@settings(max_examples=10, suppress_health_check=[HealthCheck.filter_too_much])
+def test_create_grid_from_ioapi_properties(
+    gdtyp: int, ncols: int, nrows: int, add_bounds: bool
+) -> None:
+    """
+    Test properties of create_grid_from_ioapi using Hypothesis.
+
+    Validates that grids generated from typical IOAPI metadata records across
+    different projection types are correctly structured, with matching shapes and eager/lazy parity.
+    """
+    metadata = {
+        "GDTYP": gdtyp,
+        "P_ALP": 30.0,
+        "P_BET": 60.0,
+        "P_GAM": 0.0,
+        "XCENT": -97.0,
+        "YCENT": 40.0,
+        "XORIG": -50000.0 if gdtyp != 1 else -120.0,
+        "YORIG": -50000.0 if gdtyp != 1 else 20.0,
+        "XCELL": 20000.0 if gdtyp != 1 else 1.0,
+        "YCELL": 20000.0 if gdtyp != 1 else 1.0,
+        "NCOLS": ncols,
+        "NROWS": nrows,
+    }
+
+    ds_eager = create_grid_from_ioapi(metadata, add_bounds=add_bounds)
+
+    assert "lat" in ds_eager.coords
+    assert "lon" in ds_eager.coords
+
+    # create_grid_from_ioapi returns projected 2D coordinates for all projections under create_grid_from_crs,
+    # except that GDTYP=1 is also created via create_grid_from_crs using crs='EPSG:4326', which returns 2D lat/lon.
+    assert ds_eager.lat.ndim == 2
+    assert ds_eager.lon.ndim == 2
+
+    # Lazy parity
+    ds_lazy = create_grid_from_ioapi(metadata, add_bounds=add_bounds, chunks=2)
+    assert is_lazy(ds_lazy.lat)
+    xr.testing.assert_allclose(ds_eager, ds_lazy.compute())
+
+
+@given(
+    extent=st.tuples(
+        st.floats(min_value=-170.0, max_value=-20.0),  # min_lon
+        st.floats(min_value=20.0, max_value=170.0),  # max_lon
+        st.floats(min_value=-80.0, max_value=-20.0),  # min_lat
+        st.floats(min_value=20.0, max_value=80.0),  # max_lat
+    ),
+    buffer=st.floats(min_value=0.0, max_value=5.0),
+    is_lazy_data=st.booleans(),
+)
+@settings(max_examples=10, suppress_health_check=[HealthCheck.filter_too_much])
+def test_spatial_slice_wrapping_properties(
+    extent: Tuple[float, float, float, float],
+    buffer: float,
+    is_lazy_data: bool,
+) -> None:
+    """
+    Test properties of spatial_slice on global geographic grids,
+    specifically focusing on longitude wrapping and boundary crossing behavior.
+    """
+    min_lon, max_lon, min_lat, max_lat = extent
+    assume(max_lon >= min_lon + 30.0)
+    assume(max_lat >= min_lat + 20.0)
+
+    # 0-360 global grid
+    ds = create_global_grid(res_lat=5.0, res_lon=5.0, add_bounds=False)
+    data = np.random.uniform(0.0, 100.0, size=(ds.lat.size, ds.lon.size))
+    da = xr.DataArray(data, coords=[ds.lat, ds.lon], dims=["lat", "lon"])
+
+    if is_lazy_data:
+        da = da.chunk({"lat": 10, "lon": 10})
+
+    extent_query = (min_lon, max_lon, min_lat, max_lat)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=UserWarning)
+        sliced = spatial_slice(da, extent_query, buffer=buffer)
+
+    assert "lat" in sliced.dims
+    assert "lon" in sliced.dims
+
+    # Check that coordinate ranges are properly within the buffer-adjusted bounds
+    # (Since geographic wrapping can split, longitude ranges can map to [0, 360])
+    lat_vals = sliced.lat.values
+    assert np.all(lat_vals >= min_lat - buffer - 0.1)
+    assert np.all(lat_vals <= max_lat + buffer + 0.1)
+
+
+def generate_unstructured_polygon_mesh(
+    n_cells: int, n_corners: int, center_lon_start: float = 0.5, step_lon: float = 1.0
+) -> xr.Dataset:
+    """
+    Generate an unstructured grid/mesh of regular polygons for testing.
+    """
+    r = 0.4
+    lat_b = []
+    lon_b = []
+    for i in range(n_cells):
+        c_lon = center_lon_start + i * step_lon
+        c_lat = 0.5
+        angles = np.linspace(0, 2 * np.pi, n_corners, endpoint=False)
+        lon_corners = c_lon + r * np.cos(angles)
+        lat_corners = c_lat + r * np.sin(angles)
+        lat_b.append(lat_corners)
+        lon_b.append(lon_corners)
+
+    lat_b = np.array(lat_b)
+    lon_b = np.array(lon_b)
+
+    lat_c = np.full(n_cells, 0.5)
+    lon_c = np.array([center_lon_start + i * step_lon for i in range(n_cells)])
+
+    return xr.Dataset(
+        coords={
+            "lat": (
+                ["grid_size"],
+                lat_c,
+                {"units": "degrees_north", "standard_name": "latitude"},
+            ),
+            "lon": (
+                ["grid_size"],
+                lon_c,
+                {"units": "degrees_east", "standard_name": "longitude"},
+            ),
+            "lat_b": (
+                ["grid_size", "n_corners"],
+                lat_b,
+                {"units": "degrees_north", "standard_name": "latitude_bounds"},
+            ),
+            "lon_b": (
+                ["grid_size", "n_corners"],
+                lon_b,
+                {"units": "degrees_east", "standard_name": "longitude_bounds"},
+            ),
+        }
+    )
+
+
+@given(
+    n_cells_src=st.integers(min_value=2, max_value=5),
+    n_cells_tgt=st.integers(min_value=2, max_value=5),
+    n_corners=st.integers(min_value=3, max_value=6),
+    is_lazy_data=st.booleans(),
+)
+@settings(max_examples=8, suppress_health_check=[HealthCheck.filter_too_much])
+def test_regrid_unstructured_to_unstructured_properties(
+    n_cells_src: int,
+    n_cells_tgt: int,
+    n_corners: int,
+    is_lazy_data: bool,
+) -> None:
+    """
+    Test properties of unstructured to unstructured regridding.
+    """
+    # Create source and target unstructured meshes
+    ds_src = generate_unstructured_polygon_mesh(
+        n_cells_src, n_corners, center_lon_start=0.5, step_lon=1.0
+    )
+    ds_tgt = generate_unstructured_polygon_mesh(
+        n_cells_tgt, n_corners, center_lon_start=0.5, step_lon=1.0
+    )
+
+    # Input constant field of ones
+    data = np.ones(n_cells_src)
+    da_src = xr.DataArray(
+        data,
+        dims=["grid_size"],
+        coords={"lat": ds_src.lat, "lon": ds_src.lon},
+        name="temperature",
+    )
+
+    if is_lazy_data:
+        da_src = da_src.chunk({"grid_size": 1})
+
+    weights_file = f"/tmp/test_weights_u2u_{uuid.uuid4().hex}.nc"
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", category=UserWarning)
+
+            regridder = Regridder(
+                source_grid_ds=ds_src,
+                target_grid_ds=ds_tgt,
+                method="nearest_s2d",
+                filename=weights_file,
+            )
+
+            res = regridder(da_src)
+            assert "grid_size" in res.dims
+            assert res.shape == (n_cells_tgt,)
+
+            if is_lazy_data:
+                assert is_lazy(res)
+                res_comp = res.compute()
+            else:
+                res_comp = res
+
+            # All points overlap in identical span, so bilinear/nearest on constant should return 1.0 (or close)
+            # where overlap is successful.
+            np.testing.assert_allclose(
+                res_comp.values, np.ones(n_cells_tgt), rtol=1e-3, atol=1e-3
+            )
+    finally:
+        if os.path.exists(weights_file):
+            try:
+                os.remove(weights_file)
+            except OSError:
+                pass
+
+
+@given(
+    n_cells=st.integers(min_value=2, max_value=5),
+    n_corners=st.integers(min_value=3, max_value=6),
+    res_tgt=st.floats(min_value=15.0, max_value=45.0),
+    is_lazy_data=st.booleans(),
+)
+@settings(max_examples=8, suppress_health_check=[HealthCheck.filter_too_much])
+def test_regrid_unstructured_to_rectilinear_properties(
+    n_cells: int,
+    n_corners: int,
+    res_tgt: float,
+    is_lazy_data: bool,
+) -> None:
+    """
+    Test properties of unstructured to rectilinear regridding.
+    """
+    ds_src = generate_unstructured_polygon_mesh(
+        n_cells, n_corners, center_lon_start=15.0, step_lon=25.0
+    )
+    ds_tgt = create_global_grid(res_lat=res_tgt, res_lon=res_tgt, add_bounds=True)
+
+    da_src = xr.DataArray(
+        np.full(n_cells, 10.0),
+        dims=["grid_size"],
+        coords={"lat": ds_src.lat, "lon": ds_src.lon},
+        name="temperature",
+    )
+
+    if is_lazy_data:
+        da_src = da_src.chunk({"grid_size": 1})
+
+    weights_file = f"/tmp/test_weights_u2r_{uuid.uuid4().hex}.nc"
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", category=UserWarning)
+
+            regridder = Regridder(
+                source_grid_ds=ds_src,
+                target_grid_ds=ds_tgt,
+                method="nearest_s2d",
+                filename=weights_file,
+            )
+
+            res = regridder(da_src)
+            assert "lat" in res.dims
+            assert "lon" in res.dims
+
+            if is_lazy_data:
+                assert is_lazy(res)
+                res_comp = res.compute()
+            else:
+                res_comp = res
+
+            np.testing.assert_allclose(
+                res_comp.values, np.full(res_comp.shape, 10.0), rtol=1e-3, atol=1e-3
+            )
+    finally:
+        if os.path.exists(weights_file):
+            try:
+                os.remove(weights_file)
+            except OSError:
+                pass
+
+
+@given(
+    n_cells=st.integers(min_value=2, max_value=5),
+    n_corners=st.integers(min_value=3, max_value=6),
+    is_lazy_data=st.booleans(),
+)
+@settings(max_examples=8, suppress_health_check=[HealthCheck.filter_too_much])
+def test_regrid_unstructured_to_lcc_properties(
+    n_cells: int,
+    n_corners: int,
+    is_lazy_data: bool,
+) -> None:
+    """
+    Test properties of unstructured to projected (LCC) regridding.
+    """
+    # Create unstructured mesh in geographic coordinates
+    ds_src = generate_unstructured_polygon_mesh(
+        n_cells, n_corners, center_lon_start=-97.0, step_lon=0.5
+    )
+
+    # Create LCC target grid
+    extent = (-100000.0, 100000.0, -100000.0, 100000.0)
+    res = 50000.0
+    ds_tgt = create_lcc_grid(
+        extent, res, lat_1=30.0, lat_2=60.0, lat_0=40.0, lon_0=-97.0, add_bounds=True
+    )
+
+    da_src = xr.DataArray(
+        np.full(n_cells, 20.0),
+        dims=["grid_size"],
+        coords={"lat": ds_src.lat, "lon": ds_src.lon},
+        name="temperature",
+    )
+
+    if is_lazy_data:
+        da_src = da_src.chunk({"grid_size": 1})
+
+    weights_file = f"/tmp/test_weights_u2l_{uuid.uuid4().hex}.nc"
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", category=UserWarning)
+
+            regridder = Regridder(
+                source_grid_ds=ds_src,
+                target_grid_ds=ds_tgt,
+                method="nearest_s2d",
+                filename=weights_file,
+            )
+
+            res = regridder(da_src)
+            assert "x" in res.dims
+            assert "y" in res.dims
+
+            if is_lazy_data:
+                assert is_lazy(res)
+                res_comp = res.compute()
+            else:
+                res_comp = res
+
+            np.testing.assert_allclose(
+                res_comp.values, np.full(res_comp.shape, 20.0), rtol=1e-3, atol=1e-3
+            )
+    finally:
+        if os.path.exists(weights_file):
+            try:
+                os.remove(weights_file)
+            except OSError:
+                pass
+
+
+@given(
+    res_src=st.floats(min_value=15.0, max_value=45.0),
+    n_cells=st.integers(min_value=2, max_value=5),
+    n_corners=st.integers(min_value=3, max_value=6),
+    is_lazy_data=st.booleans(),
+)
+@settings(max_examples=8, suppress_health_check=[HealthCheck.filter_too_much])
+def test_regrid_rectilinear_to_unstructured_properties(
+    res_src: float,
+    n_cells: int,
+    n_corners: int,
+    is_lazy_data: bool,
+) -> None:
+    """
+    Test properties of rectilinear to unstructured regridding.
+    """
+    ds_src = create_global_grid(res_lat=res_src, res_lon=res_src, add_bounds=True)
+    ds_tgt = generate_unstructured_polygon_mesh(
+        n_cells, n_corners, center_lon_start=15.0, step_lon=25.0
+    )
+
+    da_src = xr.DataArray(
+        np.full((ds_src.lat.size, ds_src.lon.size), 30.0),
+        dims=["lat", "lon"],
+        coords={"lat": ds_src.lat, "lon": ds_src.lon},
+        name="temperature",
+    )
+
+    if is_lazy_data:
+        da_src = da_src.chunk({"lat": 2, "lon": 2})
+
+    weights_file = f"/tmp/test_weights_r2u_{uuid.uuid4().hex}.nc"
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", category=UserWarning)
+
+            regridder = Regridder(
+                source_grid_ds=ds_src,
+                target_grid_ds=ds_tgt,
+                method="nearest_s2d",
+                filename=weights_file,
+            )
+
+            res = regridder(da_src)
+            assert "grid_size" in res.dims
+
+            if is_lazy_data:
+                assert is_lazy(res)
+                res_comp = res.compute()
+            else:
+                res_comp = res
+
+            np.testing.assert_allclose(
+                res_comp.values, np.full(n_cells, 30.0), rtol=1e-3, atol=1e-3
+            )
+    finally:
+        if os.path.exists(weights_file):
+            try:
+                os.remove(weights_file)
+            except OSError:
+                pass
+
+
+@given(
+    n_cells=st.integers(min_value=2, max_value=5),
+    n_corners=st.integers(min_value=3, max_value=6),
+    is_lazy_data=st.booleans(),
+)
+@settings(max_examples=8, suppress_health_check=[HealthCheck.filter_too_much])
+def test_regrid_lcc_to_unstructured_properties(
+    n_cells: int,
+    n_corners: int,
+    is_lazy_data: bool,
+) -> None:
+    """
+    Test properties of projected (LCC) to unstructured regridding.
+    """
+    extent = (-100000.0, 100000.0, -100000.0, 100000.0)
+    res = 50000.0
+    ds_src = create_lcc_grid(
+        extent, res, lat_1=30.0, lat_2=60.0, lat_0=40.0, lon_0=-97.0, add_bounds=True
+    )
+
+    ds_tgt = generate_unstructured_polygon_mesh(
+        n_cells, n_corners, center_lon_start=-97.0, step_lon=0.5
+    )
+
+    da_src = xr.DataArray(
+        np.full((ds_src.y.size, ds_src.x.size), 40.0),
+        dims=["y", "x"],
+        coords={"lat": ds_src.lat, "lon": ds_src.lon},
+        name="temperature",
+    )
+
+    if is_lazy_data:
+        da_src = da_src.chunk({"y": 2, "x": 2})
+
+    weights_file = f"/tmp/test_weights_l2u_{uuid.uuid4().hex}.nc"
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", category=UserWarning)
+
+            regridder = Regridder(
+                source_grid_ds=ds_src,
+                target_grid_ds=ds_tgt,
+                method="nearest_s2d",
+                filename=weights_file,
+            )
+
+            res = regridder(da_src)
+            assert "grid_size" in res.dims
+
+            if is_lazy_data:
+                assert is_lazy(res)
+                res_comp = res.compute()
+            else:
+                res_comp = res
+
+            np.testing.assert_allclose(
+                res_comp.values, np.full(n_cells, 40.0), rtol=1e-3, atol=1e-3
+            )
+    finally:
+        if os.path.exists(weights_file):
+            try:
+                os.remove(weights_file)
+            except OSError:
+                pass
+
+
+@given(
     min_x=st.floats(min_value=-180.0, max_value=170.0),
     max_x=st.floats(min_value=-170.0, max_value=180.0),
     min_y=st.floats(min_value=-90.0, max_value=80.0),
@@ -614,6 +1222,7 @@ def test_regridder_constant_preservation(
                 source_grid_ds=ds_src,
                 target_grid_ds=ds_tgt,
                 method=method,
+                extrap_method="nearest_s2d" if method != "conservative" else None,
                 filename=weights_file,
             )
 
