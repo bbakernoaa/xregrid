@@ -15,6 +15,7 @@ from xregrid.utils import (
     is_dask,
     is_cubed,
     _get_min_max_lazy_aware,
+    _compute_lazy_aware,
 )
 from xregrid.constants import (
     get_regrid_method_map,
@@ -2081,19 +2082,12 @@ class Regridder:
                         "or set the 'boundary' attribute to 'periodic' in your longitude coordinate."
                     )
                     try:
-                        # Use xarray's compute to remain backend-agnostic
-                        # if the tasks are xarray/dask objects.
-                        if hasattr(lon_min_task, "compute"):
-                            lon_min = lon_min_task.compute()
-                        else:
-                            lon_min = lon_min_task
-
-                        if hasattr(lon_max_task, "compute"):
-                            lon_max = lon_max_task.compute()
-                        else:
-                            lon_max = lon_max_task
-
-                        lon_min, lon_max = float(lon_min), float(lon_max)
+                        # Aero Protocol: Use centralized backend-agnostic compute
+                        # to resolve sampled longitude edges.
+                        res = _compute_lazy_aware(
+                            {"min": lon_min_task, "max": lon_max_task}
+                        )
+                        lon_min, lon_max = float(res["min"]), float(res["max"])
                     except Exception:
                         lon_min = lon_max = None
 
