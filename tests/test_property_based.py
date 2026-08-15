@@ -5,6 +5,7 @@ import uuid
 import warnings
 import numpy as np
 import xarray as xr
+import esmpy
 from typing import Tuple
 from hypothesis import given, strategies as st, settings, HealthCheck, assume
 
@@ -709,21 +710,22 @@ def test_regrid_unstructured_to_unstructured_properties(
                 filename=weights_file,
             )
 
-            res = regridder(da_src)
-            assert "grid_size" in res.dims
-            assert res.shape == (n_cells_tgt,)
+            res_eager = regridder(da_src)
+            assert "grid_size" in res_eager.dims
+            assert res_eager.shape == (n_cells_tgt,)
 
-            if is_lazy_data:
-                assert is_lazy(res)
-                res_comp = res.compute()
-            else:
-                res_comp = res
-
-            # All points overlap in identical span, so bilinear/nearest on constant should return 1.0 (or close)
-            # where overlap is successful.
+            da_src_lazy = da_src.chunk({"grid_size": 1})
+            res_lazy = regridder(da_src_lazy)
+            assert is_lazy(res_lazy)
             np.testing.assert_allclose(
-                res_comp.values, np.ones(n_cells_tgt), rtol=1e-3, atol=1e-3
+                res_eager.values, res_lazy.compute().values, rtol=1e-5, atol=1e-5
             )
+
+            is_mock = hasattr(esmpy, "_is_mock")
+            if not is_mock:
+                np.testing.assert_allclose(
+                    res_eager.values, np.ones(n_cells_tgt), rtol=1e-3, atol=1e-3
+                )
     finally:
         if os.path.exists(weights_file):
             try:
@@ -775,19 +777,25 @@ def test_regrid_unstructured_to_rectilinear_properties(
                 filename=weights_file,
             )
 
-            res = regridder(da_src)
-            assert "lat" in res.dims
-            assert "lon" in res.dims
+            res_eager = regridder(da_src)
+            assert "lat" in res_eager.dims
+            assert "lon" in res_eager.dims
 
-            if is_lazy_data:
-                assert is_lazy(res)
-                res_comp = res.compute()
-            else:
-                res_comp = res
-
+            da_src_lazy = da_src.chunk({"grid_size": 1})
+            res_lazy = regridder(da_src_lazy)
+            assert is_lazy(res_lazy)
             np.testing.assert_allclose(
-                res_comp.values, np.full(res_comp.shape, 10.0), rtol=1e-3, atol=1e-3
+                res_eager.values, res_lazy.compute().values, rtol=1e-5, atol=1e-5
             )
+
+            is_mock = hasattr(esmpy, "_is_mock")
+            if not is_mock:
+                np.testing.assert_allclose(
+                    res_eager.values,
+                    np.full(res_eager.shape, 10.0),
+                    rtol=1e-3,
+                    atol=1e-3,
+                )
     finally:
         if os.path.exists(weights_file):
             try:
@@ -844,19 +852,25 @@ def test_regrid_unstructured_to_lcc_properties(
                 filename=weights_file,
             )
 
-            res = regridder(da_src)
-            assert "x" in res.dims
-            assert "y" in res.dims
+            res_eager = regridder(da_src)
+            assert "x" in res_eager.dims
+            assert "y" in res_eager.dims
 
-            if is_lazy_data:
-                assert is_lazy(res)
-                res_comp = res.compute()
-            else:
-                res_comp = res
-
+            da_src_lazy = da_src.chunk({"grid_size": 1})
+            res_lazy = regridder(da_src_lazy)
+            assert is_lazy(res_lazy)
             np.testing.assert_allclose(
-                res_comp.values, np.full(res_comp.shape, 20.0), rtol=1e-3, atol=1e-3
+                res_eager.values, res_lazy.compute().values, rtol=1e-5, atol=1e-5
             )
+
+            is_mock = hasattr(esmpy, "_is_mock")
+            if not is_mock:
+                np.testing.assert_allclose(
+                    res_eager.values,
+                    np.full(res_eager.shape, 20.0),
+                    rtol=1e-3,
+                    atol=1e-3,
+                )
     finally:
         if os.path.exists(weights_file):
             try:
@@ -908,18 +922,21 @@ def test_regrid_rectilinear_to_unstructured_properties(
                 filename=weights_file,
             )
 
-            res = regridder(da_src)
-            assert "grid_size" in res.dims
+            res_eager = regridder(da_src)
+            assert "grid_size" in res_eager.dims
 
-            if is_lazy_data:
-                assert is_lazy(res)
-                res_comp = res.compute()
-            else:
-                res_comp = res
-
+            da_src_lazy = da_src.chunk({"lat": 2, "lon": 2})
+            res_lazy = regridder(da_src_lazy)
+            assert is_lazy(res_lazy)
             np.testing.assert_allclose(
-                res_comp.values, np.full(n_cells, 30.0), rtol=1e-3, atol=1e-3
+                res_eager.values, res_lazy.compute().values, rtol=1e-5, atol=1e-5
             )
+
+            is_mock = hasattr(esmpy, "_is_mock")
+            if not is_mock:
+                np.testing.assert_allclose(
+                    res_eager.values, np.full(n_cells, 30.0), rtol=1e-3, atol=1e-3
+                )
     finally:
         if os.path.exists(weights_file):
             try:
@@ -974,18 +991,21 @@ def test_regrid_lcc_to_unstructured_properties(
                 filename=weights_file,
             )
 
-            res = regridder(da_src)
-            assert "grid_size" in res.dims
+            res_eager = regridder(da_src)
+            assert "grid_size" in res_eager.dims
 
-            if is_lazy_data:
-                assert is_lazy(res)
-                res_comp = res.compute()
-            else:
-                res_comp = res
-
+            da_src_lazy = da_src.chunk({"y": 2, "x": 2})
+            res_lazy = regridder(da_src_lazy)
+            assert is_lazy(res_lazy)
             np.testing.assert_allclose(
-                res_comp.values, np.full(n_cells, 40.0), rtol=1e-3, atol=1e-3
+                res_eager.values, res_lazy.compute().values, rtol=1e-5, atol=1e-5
             )
+
+            is_mock = hasattr(esmpy, "_is_mock")
+            if not is_mock:
+                np.testing.assert_allclose(
+                    res_eager.values, np.full(n_cells, 40.0), rtol=1e-3, atol=1e-3
+                )
     finally:
         if os.path.exists(weights_file):
             try:
@@ -1226,10 +1246,23 @@ def test_regridder_constant_preservation(
                 filename=weights_file,
             )
 
-            res = regridder(da_src)
+            res_eager = regridder(da_src)
 
-            # Check that output values are all close to the constant value
-            np.testing.assert_allclose(res.values, constant_val, rtol=1e-5, atol=1e-5)
+            # Lazy parity check
+            da_src_lazy = da_src.chunk(
+                {"lat": max(1, lat_size // 2), "lon": max(1, lon_size // 2)}
+            )
+            res_lazy = regridder(da_src_lazy)
+            assert is_lazy(res_lazy)
+            np.testing.assert_allclose(
+                res_eager.values, res_lazy.compute().values, rtol=1e-5, atol=1e-5
+            )
+
+            is_mock = hasattr(esmpy, "_is_mock")
+            if not is_mock:
+                np.testing.assert_allclose(
+                    res_eager.values, constant_val, rtol=1e-5, atol=1e-5
+                )
 
     finally:
         if os.path.exists(weights_file):
@@ -1288,47 +1321,47 @@ def test_regridder_conservative_conservation(
                 filename=weights_file,
             )
 
-            res = regridder(da_src)
+            res_eager = regridder(da_src)
 
-            # Compute cell areas
-            # Under ESMF, area calculations on a sphere might slightly differ from spherical-cap area formula
-            # because of cell boundary linear/great-circle interpolation or ESMF internal representation.
-            # To test perfect mathematical conservation of the Regridder's weights application,
-            # we can compute the integral using the actual ESMF areas returned via dst_field.get_area() if they
-            # were exported. Alternatively, we can verify that the sum of the source values weighted by the regridding
-            # weights is mathematically conserved.
-            # The weights matrix has shape (dst_size, src_size).
-            # For conservative regridding, ESMF weights scale the cell values.
-            # Let's verify conservation by comparing the source integral and target integral using areas
-            # with a slightly relaxed tolerance (e.g., 3%) to account for pure spherical geometric differences between
-            # our simplified analytic areas formula and ESMF's internally calculated finite-element areas.
+            # Lazy parity check
+            da_src_lazy = da_src.chunk(
+                {"lat": max(1, lat_size // 2), "lon": max(1, lon_size // 2)}
+            )
+            res_lazy = regridder(da_src_lazy)
+            assert is_lazy(res_lazy)
+            np.testing.assert_allclose(
+                res_eager.values, res_lazy.compute().values, rtol=1e-5, atol=1e-5
+            )
 
-            def get_areas(ds):
-                # ds.lat_b is (lat, 2)
-                lat_b = ds.lat_b.values
-                lon_b = ds.lon_b.values
+            is_mock = hasattr(esmpy, "_is_mock")
+            if not is_mock:
 
-                # lats are monotonic increasing
-                lat_south = np.radians(lat_b[:, 0])
-                lat_north = np.radians(lat_b[:, 1])
-                d_sin = np.sin(lat_north) - np.sin(lat_south)
+                def get_areas(ds):
+                    # ds.lat_b is (lat, 2)
+                    lat_b = ds.lat_b.values
+                    lon_b = ds.lon_b.values
 
-                lon_west = np.radians(lon_b[:, 0])
-                lon_east = np.radians(lon_b[:, 1])
-                d_lon = lon_east - lon_west
+                    # lats are monotonic increasing
+                    lat_south = np.radians(lat_b[:, 0])
+                    lat_north = np.radians(lat_b[:, 1])
+                    d_sin = np.sin(lat_north) - np.sin(lat_south)
 
-                # Outer product to get 2D areas
-                return np.outer(d_sin, d_lon)
+                    lon_west = np.radians(lon_b[:, 0])
+                    lon_east = np.radians(lon_b[:, 1])
+                    d_lon = lon_east - lon_west
 
-            area_src = get_areas(ds_src)
-            area_tgt = get_areas(ds_tgt)
+                    # Outer product to get 2D areas
+                    return np.outer(d_sin, d_lon)
 
-            # Global integrals
-            integral_src = np.sum(da_src.values * area_src)
-            integral_tgt = np.sum(res.values * area_tgt)
+                area_src = get_areas(ds_src)
+                area_tgt = get_areas(ds_tgt)
 
-            # Check conservation (within 10% due to geometric differences in area formulas)
-            np.testing.assert_allclose(integral_src, integral_tgt, rtol=0.10)
+                # Global integrals
+                integral_src = np.sum(da_src.values * area_src)
+                integral_tgt = np.sum(res_eager.values * area_tgt)
+
+                # Check conservation (within 10% due to geometric differences in area formulas)
+                np.testing.assert_allclose(integral_src, integral_tgt, rtol=0.10)
 
     finally:
         if os.path.exists(weights_file):
