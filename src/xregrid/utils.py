@@ -108,6 +108,68 @@ def is_lazy(obj: Any) -> bool:
     return is_dask(obj) or is_cubed(obj)
 
 
+def _compute_lazy_aware(obj: Any) -> Any:
+    """
+    Compute lazy objects (Dask or Cubed) in a backend-agnostic manner.
+
+    Supports recursive resolution for single objects, lists, tuples, and dictionaries.
+
+    Parameters
+    ----------
+    obj : Any
+        The object, collection, or dictionary containing lazy or eager objects.
+
+    Returns
+    -------
+    Any
+        The evaluated object or collection of eager values.
+    """
+    if obj is None:
+        return None
+
+    if isinstance(obj, dict):
+        keys = list(obj.keys())
+        vals = [obj[k] for k in keys]
+        computed_vals = _compute_lazy_aware(vals)
+        return dict(zip(keys, computed_vals))
+
+    if isinstance(obj, (list, tuple)):
+        is_tuple = isinstance(obj, tuple)
+        if not obj:
+            return () if is_tuple else []
+
+        has_cubed_elem = any(is_cubed(item) for item in obj)
+        has_dask_elem = any(is_dask(item) for item in obj)
+
+        if has_cubed_elem and cubed is not None:
+            res = cubed.compute(*obj)
+            return tuple(res) if is_tuple else list(res)
+
+        if has_dask_elem and dask is not None:
+            res = dask.compute(*obj)
+            return tuple(res) if is_tuple else list(res)
+
+        res = [_compute_lazy_aware(item) for item in obj]
+        return tuple(res) if is_tuple else list(res)
+
+    if is_cubed(obj) and cubed is not None:
+        if hasattr(obj, "compute"):
+            return obj.compute()
+        res = cubed.compute(obj)
+        return res[0]
+
+    if is_dask(obj) and dask is not None:
+        if hasattr(obj, "compute"):
+            return obj.compute()
+        res = dask.compute(obj)
+        return res[0]
+
+    if hasattr(obj, "compute"):
+        return obj.compute()
+
+    return obj
+
+
 def _get_array_namespace(*objs: Any) -> Any:
     """
     Get the appropriate array namespace (numpy, dask.array, or cubed) for the given objects.
@@ -1327,7 +1389,7 @@ def create_grid_like(
                     tasks_dict["ymin"] = y_min
                     tasks_dict["ymax"] = y_max
 
-                results = dask.compute(tasks_dict)[0]
+                results = _compute_lazy_aware(tasks_dict)
                 extent = (
                     float(results.get("xmin", x_min)),
                     float(results.get("xmax", x_max)),
@@ -1361,7 +1423,7 @@ def create_grid_like(
                 if y_da.size > 1:
                     tasks_dict["res_y"] = abs(y_da.diff(y_da.dims[0]).mean())
 
-                results = dask.compute(tasks_dict)[0]
+                results = _compute_lazy_aware(tasks_dict)
                 x_min_val = float(results.get("x_min", x_min))
                 x_max_val = float(results.get("x_max", x_max))
                 y_min_val = float(results.get("y_min", y_min))
@@ -1436,7 +1498,7 @@ def create_grid_like(
                     tasks_dict["lon_min"] = lon_min
                     tasks_dict["lon_max"] = lon_max
 
-                results = dask.compute(tasks_dict)[0]
+                results = _compute_lazy_aware(tasks_dict)
                 lat_range = (
                     float(results.get("lat_min", lat_min)),
                     float(results.get("lat_max", lat_max)),
@@ -1472,7 +1534,7 @@ def create_grid_like(
                 if lon_da.size > 1:
                     tasks_dict["res_lon"] = abs(lon_da.diff(lon_da.dims[-1]).mean())
 
-                results = dask.compute(tasks_dict)[0]
+                results = _compute_lazy_aware(tasks_dict)
                 lat_min_val = float(results.get("lat_min", lat_min))
                 lat_max_val = float(results.get("lat_max", lat_max))
                 lon_min_val = float(results.get("lon_min", lon_min))
