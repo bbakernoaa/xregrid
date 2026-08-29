@@ -108,6 +108,53 @@ def is_lazy(obj: Any) -> bool:
     return is_dask(obj) or is_cubed(obj)
 
 
+def _compute_lazy_aware(*objs: Any) -> Any:
+    """
+    Compute lazy objects (Dask or Cubed) in a backend-agnostic manner.
+
+    Parameters
+    ----------
+    *objs : Any
+        The objects to compute.
+
+    Returns
+    -------
+    Any
+        The computed object or tuple of computed objects.
+    """
+    if len(objs) == 0:
+        return ()
+
+    dask_objs = []
+    dask_indices = []
+    cubed_objs = []
+    cubed_indices = []
+
+    for i, obj in enumerate(objs):
+        if is_dask(obj):
+            dask_objs.append(obj)
+            dask_indices.append(i)
+        elif is_cubed(obj):
+            cubed_objs.append(obj)
+            cubed_indices.append(i)
+
+    results = list(objs)
+
+    if dask_objs and dask is not None:
+        computed_dask = dask.compute(*dask_objs)
+        for idx, val in zip(dask_indices, computed_dask):
+            results[idx] = val
+
+    if cubed_objs and cubed is not None:
+        computed_cubed = cubed.compute(*cubed_objs)
+        for idx, val in zip(cubed_indices, computed_cubed):
+            results[idx] = val
+
+    if len(results) == 1:
+        return results[0]
+    return tuple(results)
+
+
 def _get_array_namespace(*objs: Any) -> Any:
     """
     Get the appropriate array namespace (numpy, dask.array, or cubed) for the given objects.
