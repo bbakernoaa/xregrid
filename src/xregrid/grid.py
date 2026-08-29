@@ -6,7 +6,7 @@ import cf_xarray  # noqa: F401
 import numpy as np
 import xarray as xr
 
-from .utils import _find_coord, is_lazy
+from .utils import _compute_lazy_aware, _find_coord
 from .constants import get_coord_sys
 
 
@@ -327,39 +327,27 @@ def _get_mesh_info(
         # This is common for GRIB2/grib2io output: latitude varies only with the first dim
         # and longitude varies only with the second dim.  Detecting this early avoids
         # sending a large 2D coordinate array to ESMF when a 1D pair would be faster.
-        if not is_lazy(lat) and not is_lazy(lon):
-            try:
-                import numpy as _np
-
-                lat_vals = lat.values
-                lon_vals = lon.values
-                # Separable if std-dev along axis of variation is ~0 for the *other* axis.
-                # lat should be constant along dim-1 (columns), lon constant along dim-0 (rows).
-                lat_col_std = float(
-                    _np.nanstd(lat_vals - lat_vals[:, :1], axis=1).max()
+        try:
+            lat_diff = (lat - lat.isel({lat.dims[1]: 0})).abs()
+            lon_diff = (lon - lon.isel({lon.dims[0]: 0})).abs()
+            lat_max_diff, lon_max_diff = _compute_lazy_aware(
+                lat_diff.max(), lon_diff.max()
+            )
+            if float(lat_max_diff) < 1e-6 and float(lon_max_diff) < 1e-6:
+                lat_1d = lat.isel({lat.dims[1]: 0})
+                lon_1d = lon.isel({lon.dims[0]: 0})
+                lon_mesh, lat_mesh = xr.broadcast(lon_1d, lat_1d)
+                lon_mesh = lon_mesh.transpose(lat_1d.dims[0], lon_1d.dims[0])
+                lat_mesh = lat_mesh.transpose(lat_1d.dims[0], lon_1d.dims[0])
+                return (
+                    lon_mesh,
+                    lat_mesh,
+                    (lat_1d.size, lon_1d.size),
+                    (lat_1d.dims[0], lon_1d.dims[0]),
+                    False,
                 )
-                lon_row_std = float(
-                    _np.nanstd(lon_vals - lon_vals[:1, :], axis=0).max()
-                )
-                if lat_col_std < 1e-6 and lon_row_std < 1e-6:
-                    lat_1d = xr.DataArray(
-                        lat_vals[:, 0], dims=[lat.dims[0]], attrs=lat.attrs
-                    )
-                    lon_1d = xr.DataArray(
-                        lon_vals[0, :], dims=[lon.dims[1]], attrs=lon.attrs
-                    )
-                    lon_mesh, lat_mesh = xr.broadcast(lon_1d, lat_1d)
-                    lon_mesh = lon_mesh.transpose(lat_1d.dims[0], lon_1d.dims[0])
-                    lat_mesh = lat_mesh.transpose(lat_1d.dims[0], lon_1d.dims[0])
-                    return (
-                        lon_mesh,
-                        lat_mesh,
-                        (lat_1d.size, lon_1d.size),
-                        (lat_1d.dims[0], lon_1d.dims[0]),
-                        False,
-                    )
-            except Exception:
-                pass
+        except Exception:
+            pass
         # General curvilinear
         if lon.ndim == 2 and lon.dims != lat.dims and set(lon.dims) == set(lat.dims):
             lon = lon.transpose(*lat.dims)
