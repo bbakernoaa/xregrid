@@ -86,9 +86,9 @@ def test_regridder_periodicity_lazy():
         with counter:
             regridder = Regridder(ds_src_meta, ds_tgt, method="bilinear")
         assert regridder.periodic is True
-        assert (
-            counter.count == 0
-        ), f"Metadata-based detection triggered {counter.count} computes"
+        assert counter.count == 0, (
+            f"Metadata-based detection triggered {counter.count} computes"
+        )
 
     # Case 3: Explicit periodicity avoids compute and warning
     with patch("xregrid.regridder.Regridder._generate_weights"):
@@ -96,9 +96,9 @@ def test_regridder_periodicity_lazy():
         with counter:
             regridder = Regridder(ds_src, ds_tgt, method="bilinear", periodic=True)
         assert regridder.periodic is True
-        assert (
-            counter.count == 0
-        ), f"Explicit periodicity triggered {counter.count} computes"
+        assert counter.count == 0, (
+            f"Explicit periodicity triggered {counter.count} computes"
+        )
 
 
 if __name__ == "__main__":
