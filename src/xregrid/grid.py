@@ -327,35 +327,35 @@ def _get_mesh_info(
         # This is common for GRIB2/grib2io output: latitude varies only with the first dim
         # and longitude varies only with the second dim.  Detecting this early avoids
         # sending a large 2D coordinate array to ESMF when a 1D pair would be faster.
+        # Strict Aero Protocol: Lazy arrays (Dask/Cubed) bypass eager evaluation to avoid hidden computes.
         if not is_lazy(lat) and not is_lazy(lon):
             try:
-                import numpy as _np
+                lat_1d_candidate = lat.isel({lat.dims[1]: 0})
+                lon_1d_candidate = lon.isel({lon.dims[0]: 0})
 
-                lat_vals = lat.values
-                lon_vals = lon.values
-                # Separable if std-dev along axis of variation is ~0 for the *other* axis.
-                # lat should be constant along dim-1 (columns), lon constant along dim-0 (rows).
-                lat_col_std = float(
-                    _np.nanstd(lat_vals - lat_vals[:, :1], axis=1).max()
+                # Use .variable to avoid Xarray automatic coordinate alignment on scalar dimension coordinates
+                lat_dev = float(
+                    (lat.variable - lat_1d_candidate.variable).abs().max().item()
                 )
-                lon_row_std = float(
-                    _np.nanstd(lon_vals - lon_vals[:1, :], axis=0).max()
+                lon_dev = float(
+                    (lon.variable - lon_1d_candidate.variable).abs().max().item()
                 )
-                if lat_col_std < 1e-6 and lon_row_std < 1e-6:
-                    lat_1d = xr.DataArray(
-                        lat_vals[:, 0], dims=[lat.dims[0]], attrs=lat.attrs
+
+                if lat_dev < 1e-6 and lon_dev < 1e-6:
+                    lon_mesh, lat_mesh = xr.broadcast(
+                        lon_1d_candidate, lat_1d_candidate
                     )
-                    lon_1d = xr.DataArray(
-                        lon_vals[0, :], dims=[lon.dims[1]], attrs=lon.attrs
+                    lon_mesh = lon_mesh.transpose(
+                        lat_1d_candidate.dims[0], lon_1d_candidate.dims[0]
                     )
-                    lon_mesh, lat_mesh = xr.broadcast(lon_1d, lat_1d)
-                    lon_mesh = lon_mesh.transpose(lat_1d.dims[0], lon_1d.dims[0])
-                    lat_mesh = lat_mesh.transpose(lat_1d.dims[0], lon_1d.dims[0])
+                    lat_mesh = lat_mesh.transpose(
+                        lat_1d_candidate.dims[0], lon_1d_candidate.dims[0]
+                    )
                     return (
                         lon_mesh,
                         lat_mesh,
-                        (lat_1d.size, lon_1d.size),
-                        (lat_1d.dims[0], lon_1d.dims[0]),
+                        (lat_1d_candidate.size, lon_1d_candidate.size),
+                        (lat_1d_candidate.dims[0], lon_1d_candidate.dims[0]),
                         False,
                     )
             except Exception:
